@@ -2,6 +2,7 @@ library(shiny)
 library(shinythemes)
 library(shinyWidgets)
 library(shinyjs)
+library(shinycssloaders)
 library(tidyverse)
 library(DT)
 library(MCDM)
@@ -40,8 +41,10 @@ ui <- tagList(
               radioButtons(
                 "source",
                 "Select source of data",
-                choices = c("Example dataset" = "example",
-                            "Upload dataset" = "upload")
+                choices = c(
+                  "Example dataset" = "example",
+                  "Upload dataset" = "upload"
+                )
               ),
               conditionalPanel(
                 condition = "input.source == 'example'",
@@ -79,8 +82,8 @@ ui <- tagList(
                   choices = NULL,
                   multiple = TRUE,
                   options = list(
-                    'live-search' = TRUE,
-                    'actions-box' = TRUE
+                    "live-search" = TRUE,
+                    "actions-box" = TRUE
                   )
                 ),
                 pickerInput(
@@ -89,8 +92,8 @@ ui <- tagList(
                   choices = NULL,
                   multiple = TRUE,
                   options = list(
-                    'live-search' = TRUE,
-                    'actions-box' = TRUE
+                    "live-search" = TRUE,
+                    "actions-box" = TRUE
                   )
                 ),
                 actionButton(
@@ -100,7 +103,7 @@ ui <- tagList(
               )
             ),
             mainPanel(
-              DT::dataTableOutput("tab_dataset")
+              withSpinner(DT::dataTableOutput("tab_dataset"), type = 5, color = "#34495e")
             )
           )
         ),
@@ -109,11 +112,10 @@ ui <- tagList(
           icon = icon("line-chart"),
           sidebarLayout(
             sidebarPanel(
-              icon("sliders", "fa-2x"),
               uiOutput("setting_panel")
             ),
             mainPanel(
-              
+              withSpinner(DT::dataTableOutput("tab_res"), type = 5, color = "#34495e")
             )
           )
         ),
@@ -127,12 +129,12 @@ ui <- tagList(
       )
     )
   )
-  )
+)
 
 server <- function(input, output, session) {
   hide(id = "loading-content", anim = TRUE, animType = "fade")
   show("app-content")
-  
+
   observe({
     if (input$source == "example") {
       enable("use")
@@ -142,7 +144,7 @@ server <- function(input, output, session) {
       disable("use")
     }
   })
-  
+
   rawdata <- eventReactive(input$use, {
     if (input$source == "example") {
       read_csv("./data/dummy.csv")
@@ -150,41 +152,43 @@ server <- function(input, output, session) {
       read_csv(input$upload_data$datapath)
     }
   })
-  
+
   observeEvent(input$use, {
     updatePickerInput(
       session = session,
       inputId = "alternative",
       choices = names(rawdata())
     )
-    
+
     updatePickerInput(
       session = session,
       inputId = "attribute_max",
       choices = names(rawdata())
     )
-    
+
     updatePickerInput(
       session = session,
       inputId = "attribute_min",
       choices = names(rawdata())
     )
   })
-  
+
   observe({
-    toggleState(id = "show", condition = !is.null(input$alternative) & {!is.null(input$attribute_max) | !is.null(input$attribute_min)})
+    toggleState(id = "show", condition = !is.null(input$alternative) & {
+      !is.null(input$attribute_max) | !is.null(input$attribute_min)
+    })
   })
-  
-  tab_dataset <- eventReactive(input$show, {
-    rawdata() %>% 
+
+  dataset <- eventReactive(input$show, {
+    rawdata() %>%
       select(one_of(input$alternative, input$attribute_max, input$attribute_min))
   })
-  
+
   output$tab_dataset <- DT::renderDataTable({
-    tab_dataset() %>%
+    dataset() %>%
       datatable(
         rownames = FALSE,
-        style = 'bootstrap',
+        style = "bootstrap",
         extensions = c("Scroller", "Buttons"),
         options = list(
           dom = "Brt",
@@ -209,35 +213,152 @@ server <- function(input, output, session) {
   },
   server = FALSE
   )
-  
+
   observeEvent(input$show, {
     output$setting_panel <- renderUI({
       tagList(
-        lapply(c(input$attribute_max, input$attribute_min), function(i){
-          numericInput(inputId = paste0("attr_", i), label = paste("Weight for", i),
-                       min = 0, max = 1, value = 1/length(c(input$attribute_max, input$attribute_min)))
-        }),
+        map(
+          c(input$attribute_max, input$attribute_min),
+          ~ numericInput(
+            inputId = paste0("weight_", .x), label = paste("Weight for", .x),
+            min = 0, max = 1, value = 1 / length(c(input$attribute_max, input$attribute_min))
+          )
+        ),
+        helpText("The sum of weights should be equal to 1"),
         pickerInput(
           "method",
           "Method",
           choices = c(
+            # "Meta Ranking" = "MetaRanking",
             "Multi-MOORA" = "MMOORA",
-            "RIM" = "RIM",
+            # "RIM" = "RIM",
             "TOPSIS Linear" = "TOPSISLinear",
-            "TOPSIS Vector" = "TOPSISVector",
-            "VIKOR" = "VIKOR",
-            "WASPAS" = "WASPAS",
-            "Meta Ranking" = "MetaRanking"
-          )
+            "TOPSIS Vector" = "TOPSISVector"
+            # "VIKOR" = "VIKOR",
+            # "WASPAS" = "WASPAS"
+          ),
+          selected = "TOPSISVector"
         ),
         actionButton(
           "apply",
           "Apply"
         )
       )
-      
     })
   })
+
+  res <- eventReactive(input$apply, {
+    if (input$method == "MetaRanking") {
+      "a"
+    } else if (input$method == "MMOORA") {
+      cb <- c(
+        rep("max", length(input$attribute_max)),
+        rep("min", length(input$attribute_min))
+      )
+      
+      w <- map_dbl(
+        c(input$attribute_max, input$attribute_min),
+        ~ input[[paste0("weight_", .x)]]
+      )
+      
+      res <- dataset() %>%
+        as.data.frame() %>%
+        `rownames<-`(.[, input$alternative]) %>%
+        select_if(is.numeric) %>%
+        as.matrix() %>%
+        MMOORA(w, cb) %>%
+        as_tibble() %>%
+        rename(Alternative = Alternatives,
+               "Ratio System" = RatioSystem,
+               "Ranking (Ratio System)" = Ranking,
+               "Reference Point" = ReferencePoint,
+               "Ranking (Reference Point)" = Ranking.1,
+               "Multiplicative Form" = MultiplicativeForm,
+               "Ranking (Multipicative Form)" = Ranking.2,
+               "Overal Ranking (Multi MOORA)" = MultiMooraRanking) %>% 
+        mutate(Alternative = pull(dataset()[, input$alternative])) %>% 
+        mutate_if(is_double, .funs = funs(round(., 2)))
+    } else if (input$method == "RIM") {
+      
+    } else if (input$method == "TOPSISLinear") {
+      cb <- c(
+        rep("max", length(input$attribute_max)),
+        rep("min", length(input$attribute_min))
+      )
+      
+      w <- map_dbl(
+        c(input$attribute_max, input$attribute_min),
+        ~ input[[paste0("weight_", .x)]]
+      )
+      
+      res <- dataset() %>%
+        as.data.frame() %>%
+        `rownames<-`(.[, input$alternative]) %>%
+        select_if(is.numeric) %>%
+        as.matrix() %>%
+        TOPSISLinear(w, cb) %>%
+        as_tibble() %>%
+        rename(Alternative = Alternatives,
+               "R index" = R) %>%
+        mutate(Alternative = pull(dataset()[, input$alternative])) %>% 
+        mutate_if(is_double, .funs = funs(round(., 2)))
+    } else if (input$method == "TOPSISVector") {
+      cb <- c(
+        rep("max", length(input$attribute_max)),
+        rep("min", length(input$attribute_min))
+      )
+
+      w <- map_dbl(
+        c(input$attribute_max, input$attribute_min),
+        ~ input[[paste0("weight_", .x)]]
+      )
+
+      res <- dataset() %>%
+        as.data.frame() %>%
+        `rownames<-`(.[, input$alternative]) %>%
+        select_if(is.numeric) %>%
+        as.matrix() %>%
+        TOPSISVector(w, cb) %>%
+        as_tibble() %>%
+        rename(Alternative = Alternatives,
+               "R index" = R) %>%
+        mutate(Alternative = pull(dataset()[, input$alternative])) %>% 
+        mutate_if(is_double, .funs = funs(round(., 2)))
+    } else if (input$method == "VIKOR") {
+      
+    } else if (input$method == "WASPAS")
+    return(res)
+  })
+  
+  output$tab_res <- DT::renderDataTable({
+    res() %>%
+      datatable(
+        rownames = FALSE,
+        style = "bootstrap",
+        extensions = c("Scroller", "Buttons"),
+        options = list(
+          dom = "Brt",
+          autoWidth = FALSE,
+          scrollX = TRUE,
+          deferRender = TRUE,
+          scrollY = 300,
+          scroller = TRUE,
+          buttons =
+            list(
+              list(
+                extend = "copy"
+              ),
+              list(
+                extend = "collection",
+                buttons = c("csv", "excel"),
+                text = "Download"
+              )
+            )
+        )
+      )
+  },
+  server = FALSE
+  )
 }
 
 shinyApp(ui = ui, server = server)
