@@ -5,6 +5,7 @@ library(shinyjs)
 library(shinycssloaders)
 library(tidyverse)
 library(DT)
+library(formattable)
 library(MCDM)
 
 ui <- tagList(
@@ -180,13 +181,48 @@ server <- function(input, output, session) {
   })
 
   dataset <- eventReactive(input$show, {
-    rawdata() %>%
-      select(one_of(input$alternative, input$attribute_max, input$attribute_min))
+    cost <- style(
+      "background-color" = csscolor("darkred"),
+      color = "white",
+      display = "block",
+      "border-radius" = "4px",
+      "padding" = "0 4px"
+    )
+    
+    benefit <- style(
+      "background-color" = csscolor("seagreen"),
+      color = "white",
+      display = "block",
+      "border-radius" = "4px",
+      "padding" = "0 4px"
+    )
+    
+    if (!is.null(input$attribute_max) & !is.null(input$attribute_min)) {
+      res <- rawdata() %>%
+        select(one_of(input$alternative, input$attribute_max, input$attribute_min)) %>% 
+        formattable(
+          list(area(col = isolate(input$attribute_max)) ~ formatter("span", style = benefit),
+               area(col = isolate(input$attribute_min)) ~ formatter("span", style = cost))
+        )
+    } else if  (is.null(input$attribute_min)) {
+      res <- rawdata() %>%
+        select(one_of(input$alternative, input$attribute_max, input$attribute_min)) %>% 
+        formattable(
+          list(area(col = isolate(input$attribute_max)) ~ formatter("span", style = benefit))
+        )
+    } else if (is.null(input$attribute_max)) {
+      res <- rawdata() %>%
+        select(one_of(input$alternative, input$attribute_max, input$attribute_min)) %>% 
+        formattable(
+          list(area(col = isolate(input$attribute_min)) ~ formatter("span", style = cost))
+        )
+    }
+    return(res)
   })
 
   output$tab_dataset <- DT::renderDataTable({
     dataset() %>%
-      datatable(
+      as.datatable(
         rownames = FALSE,
         style = "bootstrap",
         extensions = c("Scroller", "Buttons"),
