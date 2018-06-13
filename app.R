@@ -8,6 +8,8 @@ library(DT)
 library(formattable)
 library(MCDM)
 
+source("./helpers/MetaRanking_custom.R")
+
 ui <- tagList(
   useShinyjs(),
   inlineCSS(
@@ -98,8 +100,8 @@ ui <- tagList(
                   )
                 ),
                 actionButton(
-                  "show",
-                  "Show dataset"
+                  "arrange",
+                  "Arrange dataset"
                 )
               )
             ),
@@ -113,7 +115,65 @@ ui <- tagList(
           icon = icon("line-chart"),
           sidebarLayout(
             sidebarPanel(
-              uiOutput("setting_panel")
+              uiOutput("setting_panel"),
+              pickerInput(
+                "method",
+                "Method",
+                choices = c(
+                  "Multi-MOORA" = "MMOORA",
+                  "TOPSIS Linear" = "TOPSISLinear",
+                  "TOPSIS Vector" = "TOPSISVector",
+                  "VIKOR" = "VIKOR",
+                  "WASPAS" = "WASPAS",
+                  "Meta Ranking" = "MetaRanking"
+                ),
+                selected = "TOPSISVector"
+              ),
+              conditionalPanel(
+                condition = "input.method == 'VIKOR'",
+                sliderInput(
+                  "v",
+                  "'v' value (Default: 0.5)",
+                  min = 0,
+                  max = 1,
+                  value = 0.5,
+                  step = 0.1
+                )
+              ),
+              conditionalPanel(
+                condition = "input.method == 'WASPAS'",
+                sliderInput(
+                  "lambda",
+                  "'lambda' value (Default: 0.5)",
+                  min = 0,
+                  max = 1,
+                  value = 0.5,
+                  step = 0.1
+                )
+              ),
+              conditionalPanel(
+                condition = "input.method == 'MetaRanking'",
+                sliderInput(
+                  "v",
+                  "'v' value (Default: 0.5)",
+                  min = 0,
+                  max = 1,
+                  value = 0.5,
+                  step = 0.1
+                ),
+                sliderInput(
+                  "lambda",
+                  "'lambda' value (Default: 0.5)",
+                  min = 0,
+                  max = 1,
+                  value = 0.5,
+                  step = 0.1
+                )
+              ),
+              actionButton(
+                "apply",
+                "Apply"
+              )
             ),
             mainPanel(
               withSpinner(DT::dataTableOutput("tab_res"), type = 5, color = "#34495e")
@@ -175,12 +235,26 @@ server <- function(input, output, session) {
   })
 
   observe({
-    toggleState(id = "show", condition = !is.null(input$alternative) & {
+    toggleState(id = "arrange", condition = !is.null(input$alternative) & {
       !is.null(input$attribute_max) | !is.null(input$attribute_min)
     })
   })
+  
+  observeEvent(input$arrange, {
+    showModal(
+      modalDialog(
+        title = strong("Dataset is set!"),
+        "Please have a look at the arranged dataset, is it already in correct set up?", 
+        br(),
+        "If so, please continue to 'Analysis' tab! Otherwise, you can rearrange the dataset.",
+        size = "m",
+        easyClose = TRUE, 
+        fade = TRUE
+      )
+    )
+  })
 
-  dataset <- eventReactive(input$show, {
+  dataset <- eventReactive(input$arrange, {
     cost <- style(
       "background-color" = csscolor("darkred"),
       color = "white",
@@ -224,7 +298,7 @@ server <- function(input, output, session) {
     dataset() %>%
       as.datatable(
         rownames = FALSE,
-        caption = "Columns with red colour define attributes which are desirable in high values, whereas columns with green colour define attributes which are undesirable in high values.",
+        caption = "Columns with green colour define attributes which are desirable in high values, whereas columns with red colour define attributes which are undesirable in high values.",
         style = "bootstrap",
         extensions = c("Scroller", "Buttons"),
         options = list(
@@ -251,7 +325,7 @@ server <- function(input, output, session) {
   server = FALSE
   )
 
-  observeEvent(input$show, {
+  observeEvent(input$arrange, {
     output$setting_panel <- renderUI({
       tagList(
         map(
@@ -261,32 +335,45 @@ server <- function(input, output, session) {
             min = 0, max = 1, value = 1 / length(c(input$attribute_max, input$attribute_min))
           )
         ),
-        helpText("The sum of weights should be equal to 1"),
-        pickerInput(
-          "method",
-          "Method",
-          choices = c(
-            # "Meta Ranking" = "MetaRanking",
-            "Multi-MOORA" = "MMOORA",
-            # "RIM" = "RIM",
-            "TOPSIS Linear" = "TOPSISLinear",
-            "TOPSIS Vector" = "TOPSISVector"
-            # "VIKOR" = "VIKOR",
-            # "WASPAS" = "WASPAS"
-          ),
-          selected = "TOPSISVector"
-        ),
-        actionButton(
-          "apply",
-          "Apply"
-        )
+        helpText("The sum of weights should be equal to 1")
       )
     })
+  })
+  
+  observe({
+    toggleState(
+      id = "apply",
+      condition = !is.null(dataset())
+    )
   })
 
   res <- eventReactive(input$apply, {
     if (input$method == "MetaRanking") {
-      "a"
+      cb <- c(
+        rep("max", length(input$attribute_max)),
+        rep("min", length(input$attribute_min))
+      )
+      
+      w <- map_dbl(
+        c(input$attribute_max, input$attribute_min),
+        ~ input[[paste0("weight_", .x)]]
+      )
+      
+      res <- dataset() %>%
+        as.data.frame() %>%
+        `rownames<-`(.[, input$alternative]) %>%
+        select_if(is.numeric) %>%
+        as.matrix() %>%
+        MetaRanking_custom(weights = w, cb =  cb, v = input$v, lambda = input$lambda) %>%
+        as_tibble() %>%
+        rename(Alternative = Alternatives,
+               "TOPSIS Vector" = TOPSISVector,
+               "TOPSIS Linear" = TOPSISLinear,
+               "Meta Ranking (Sum)" = MetaRanking_Sum,
+               "Meta Ranking (Aggregate)" = MetaRanking_Aggreg) %>%
+        mutate(Alternative = pull(dataset()[, input$alternative])) %>% 
+        mutate_if(is_double, .funs = funs(round(., 2)))
+      
     } else if (input$method == "MMOORA") {
       cb <- c(
         rep("max", length(input$attribute_max)),
@@ -362,8 +449,54 @@ server <- function(input, output, session) {
         mutate(Alternative = pull(dataset()[, input$alternative])) %>% 
         mutate_if(is_double, .funs = funs(round(., 2)))
     } else if (input$method == "VIKOR") {
+      cb <- c(
+        rep("max", length(input$attribute_max)),
+        rep("min", length(input$attribute_min))
+      )
       
-    } else if (input$method == "WASPAS")
+      w <- map_dbl(
+        c(input$attribute_max, input$attribute_min),
+        ~ input[[paste0("weight_", .x)]]
+      )
+      
+      res <- dataset() %>%
+        as.data.frame() %>%
+        `rownames<-`(.[, input$alternative]) %>%
+        select_if(is.numeric) %>%
+        as.matrix() %>%
+        VIKOR(w, cb, v = input$v) %>%
+        as_tibble() %>%
+        rename(Alternative = Alternatives,
+               "S index" = S,
+               "R index" = R,
+               "Q index" = Q) %>%
+        mutate(Alternative = pull(dataset()[, input$alternative])) %>% 
+        mutate_if(is_double, .funs = funs(round(., 2)))
+    } else if (input$method == "WASPAS") {
+      cb <- c(
+        rep("max", length(input$attribute_max)),
+        rep("min", length(input$attribute_min))
+      )
+      
+      w <- map_dbl(
+        c(input$attribute_max, input$attribute_min),
+        ~ input[[paste0("weight_", .x)]]
+      )
+      
+      res <- dataset() %>%
+        as.data.frame() %>%
+        `rownames<-`(.[, input$alternative]) %>%
+        select_if(is.numeric) %>%
+        as.matrix() %>%
+        WASPAS(w, cb, lambda = input$lambda) %>%
+        as_tibble() %>%
+        rename(Alternative = Alternatives,
+               "WSM Score" = WSM,
+               "WPM Score" = WPM,
+               "Q index" = Q) %>%
+        mutate(Alternative = pull(dataset()[, input$alternative])) %>% 
+        mutate_if(is_double, .funs = funs(round(., 2))) 
+    }
     return(res)
   })
   
