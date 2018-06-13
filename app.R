@@ -224,6 +224,7 @@ server <- function(input, output, session) {
     dataset() %>%
       as.datatable(
         rownames = FALSE,
+        caption = "Columns with red colour define attributes which are desirable in high values, whereas columns with green colour define attributes which are undesirable in high values.",
         style = "bootstrap",
         extensions = c("Scroller", "Buttons"),
         options = list(
